@@ -1,63 +1,190 @@
 import './style.css'
 import Logo from './assets/logo.svg'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8001';
-
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://localhost:8443';
+const TOKEN_KEY = 'avyn_token';
 const app = document.getElementById('app');
+
+// Variables globales para el chat y audio
 let mediaRecorder: MediaRecorder | null = null;
 let audioChunks: Blob[] = [];
 let mediaStream: MediaStream | null = null;
 
+let messagesElement: HTMLDivElement;
+let inputElement: HTMLInputElement;
+let micBtnElement: HTMLButtonElement;
+let sendBtnElement: HTMLButtonElement;
+
 if (!app) throw new Error('#app no encontrado');
 
+// --- Gestión del Token ---
+function saveToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
 
-app.innerHTML = `
-  <div class="chat-container">
-    <header class="chat-header">
-      <div class="header-title">
-        <img src="${Logo}" class="framework" alt="Logo AVYN">
-      </div>
-    </header>
-    <main class="chat-content">
-      <h1 class="welcome-text">¿Cómo podemos ayudarte?</h1>
-      <div class="messages" role="log"></div>
-    </main>
-    <footer class="chat-footer">
-      <div class="suggestions">
-        <button class="chip">Navega a la web</button>
-      </div>
-      <div class="input-area">
-        <button class="plus-btn">+</button>
-        <input type="text" id="chat-input" placeholder="Escribe algo o usa el micro...">
-        <button type="button" id="mic-btn" class="audio-btn">🎤</button>
-        <button type="button" id="send-btn" class="send-btn">↑</button>
-      </div>
-      <p class="disclaimer">La IA puede cometer errores. Verifica la información importante.</p>
-    </footer>
-  </div>
-`;
+function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
 
-const messages = document.querySelector('.messages') as HTMLDivElement;
-const input = document.getElementById('chat-input') as HTMLInputElement;
-const micBtn = document.getElementById('mic-btn') as HTMLButtonElement;
-const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
 
+// --- Vista de Login ---
+function mostrarLogin() {
+  app!.innerHTML = `
+    <div class="login-container" style="display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f5f7fb;">
+      <form id="login-form" class="login-card" style="display: flex; flex-direction: column; width: 100%; max-width: 400px; padding: 2.5rem; background: #fff; border-radius: 12px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); gap: 1.2rem;">
+        <div style="text-align: center; margin-bottom: 1rem;">
+          <img src="${Logo}" alt="Logo AVYN" style="height: 50px; margin-bottom: 1rem;">
+          <h1 style="font-size: 1.8rem; color: #1e293b; margin: 0;">Acceso a AVYN</h1>
+          <p style="color: #64748b; font-size: 0.9rem; margin-top: 0.4rem;">Introduce tus credenciales para continuar</p>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label for="email" style="font-size: 0.85rem; font-weight: 600; color: #475569;">Email</label>
+          <input 
+            type="email" 
+            id="email" 
+            placeholder="ejemplo@correo.com" 
+            required 
+            style="padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 1rem;"
+          />
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 0.4rem;">
+          <label for="password" style="font-size: 0.85rem; font-weight: 600; color: #475569;">Contraseña</label>
+          <input 
+            type="password" 
+            id="password" 
+            placeholder="••••••••" 
+            required 
+            style="padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 1rem;"
+          />
+        </div>
+
+        <button type="submit" style="padding: 0.75rem; background: #2563eb; color: white; border: none; border-radius: 6px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: background 0.2s;">
+          Entrar
+        </button>
+
+        <p id="login-error" style="color: #ef4444; font-size: 0.9rem; text-align: center; margin: 0; min-height: 1.2rem; font-weight: 500;"></p>
+      </form>
+    </div>
+  `;
+
+  const form = document.getElementById('login-form') as HTMLFormElement;
+  const errorElement = document.getElementById('login-error') as HTMLParagraphElement;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorElement.textContent = ''; // Limpiar errores previos
+
+    const email = (document.getElementById('email') as HTMLInputElement).value;
+    const password = (document.getElementById('password') as HTMLInputElement).value;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        // Captura el mensaje exacto que devuelve tu backend ("Credenciales de acceso incorrectas", etc.)
+        errorElement.textContent = data.detail || 'Usuario o contraseña incorrectos';
+        return;
+      }
+
+      // Guardamos el token (access_token según tus capturas de Bruno)
+      saveToken(data.access_token);
+      mostrarChat();
+
+    } catch (err) {
+      errorElement.textContent = 'Error de conexión con el servidor';
+    }
+  });
+}
+
+// --- Vista de Chat ---
+function mostrarChat() {
+  app!.innerHTML = `
+    <div class="chat-container">
+      <header class="chat-header">
+        <div class="header-title" style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+          <img src="${Logo}" class="framework" alt="Logo AVYN">
+          <button id="logout-btn" style="padding: 0.5rem 1rem; background: #e2e8f0; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">Cerrar sesión</button>
+        </div>
+      </header>
+      <main class="chat-content">
+        <h1 class="welcome-text">¿Cómo podemos ayudarte?</h1>
+        <div class="messages" role="log"></div>
+      </main>
+      <footer class="chat-footer">
+     
+        <div class="input-area">
+          <button class="plus-btn">+</button>
+          <input type="text" id="chat-input" placeholder="Escribe algo o usa el micro...">
+          <button type="button" id="mic-btn" class="audio-btn">🎤</button>
+          <button type="button" id="send-btn" class="send-btn">↑</button>
+        </div>
+        <p class="disclaimer">La IA puede cometer errores. Verifica la información importante.</p>
+      </footer>
+    </div>
+  `;
+
+  // Mapear elementos del DOM del chat tras ser inyectados
+  messagesElement = document.querySelector('.messages') as HTMLDivElement;
+  inputElement = document.getElementById('chat-input') as HTMLInputElement;
+  micBtnElement = document.getElementById('mic-btn') as HTMLButtonElement;
+  sendBtnElement = document.getElementById('send-btn') as HTMLButtonElement;
+  const logoutBtn = document.getElementById('logout-btn') as HTMLButtonElement;
+  const chipBtn = document.querySelector('.chip') as HTMLButtonElement;
+
+  // Registrar listeners del Chat
+  sendBtnElement.addEventListener('click', () => void mandarMensaje());
+
+  inputElement.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void mandarMensaje();
+    }
+  });
+
+  if (chipBtn) {
+    chipBtn.addEventListener('click', () => {
+      inputElement.value = 'Navega a la web';
+      inputElement.focus();
+    });
+  }
+
+  logoutBtn.addEventListener('click', () => {
+    clearToken();
+    mostrarLogin();
+  });
+
+  // Configurar el micrófono
+  inicializarMicrofono();
+}
+
+// --- Funciones del Chat ---
 function toggleLoading(isLoading: boolean) {
   const existing = document.getElementById('loading-indicator');
   if (isLoading) {
-    input.disabled = true;
-    sendBtn.disabled = true;
+    inputElement.disabled = true;
+    sendBtnElement.disabled = true;
     const loader = document.createElement('div');
     loader.id = 'loading-indicator';
     loader.className = 'message bot thinking';
     loader.textContent = 'AVYN está pensando...';
-    messages.appendChild(loader);
-    messages.scrollTop = messages.scrollHeight;
+    messagesElement.appendChild(loader);
+    messagesElement.scrollTop = messagesElement.scrollHeight;
   } else {
-    input.disabled = false;
-    sendBtn.disabled = false;
+    inputElement.disabled = false;
+    sendBtnElement.disabled = false;
     existing?.remove();
-    input.focus();
+    inputElement.focus();
   }
 }
 
@@ -65,96 +192,91 @@ function mostrarMensaje(type: 'user' | 'bot', text: string) {
   const div = document.createElement('div');
   div.className = `message ${type}`;
   div.textContent = text;
-  messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
+  messagesElement.appendChild(div);
+  messagesElement.scrollTop = messagesElement.scrollHeight;
 }
 
 async function mandarMensaje() {
-  const text = input.value.trim();
-  if (!text || input.disabled) return;
+  const text = inputElement.value.trim();
+  if (!text || inputElement.disabled) return;
 
   mostrarMensaje('user', text);
-  input.value = '';
+  inputElement.value = '';
   toggleLoading(true);
 
   try {
     const res = await fetch(`${API_BASE_URL}/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${getToken()}` // Adjuntamos token de seguridad
+      },
       body: JSON.stringify({ text })
     });
     const data = await res.json();
-    console.log('Respuesta del servidor:', data); // debug
     manejarRespuesta(data);
   } catch (err) {
     mostrarMensaje('bot', 'Error de conexión con el servidor.');
-    // TODO: diferenciar entre timeout, 500, y red caída
   } finally {
     toggleLoading(false);
   }
 }
 
-
-
+// --- Lógica del Micrófono / Grabación ---
 function getSupportedAudioMimeType(): string {
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/ogg;codecs=opus',
-    'audio/mp4'
-  ];
-
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
   for (const candidate of candidates) {
     if (MediaRecorder.isTypeSupported(candidate)) return candidate;
   }
-
   return '';
 }
 
-micBtn.addEventListener('click', async () => {
-  if (mediaRecorder?.state === 'recording') {
-    mediaRecorder.stop();
-    micBtn.classList.remove('recording');
-    micBtn.textContent = '🎤';
-    return;
-  }
-
-  try {
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      mostrarMensaje('bot', 'Tu navegador no soporta grabacion de audio.');
+function inicializarMicrofono() {
+  micBtnElement.addEventListener('click', async () => {
+    if (mediaRecorder?.state === 'recording') {
+      mediaRecorder.stop();
+      micBtnElement.classList.remove('recording');
+      micBtnElement.textContent = '🎤';
       return;
     }
 
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = getSupportedAudioMimeType();
-    mediaRecorder = mimeType
-      ? new MediaRecorder(mediaStream, { mimeType })
-      : new MediaRecorder(mediaStream);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        mostrarMensaje('bot', 'Tu navegador no soporta grabación de audio.');
+        return;
+      }
 
-    audioChunks = [];
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunks.push(e.data);
-    };
-    mediaRecorder.onstop = async () => {
-      const blobType = mediaRecorder?.mimeType || 'audio/webm';
-      const audioBlob = new Blob(audioChunks, { type: blobType });
-      await enviarAudio(audioBlob);
-      mediaStream?.getTracks().forEach((t) => t.stop());
-      mediaStream = null;
-    };
-    mediaRecorder.start();
-    micBtn.classList.add('recording');
-    micBtn.textContent = '🛑';
-  } catch {
-    mostrarMensaje('bot', 'No se pudo acceder al microfono. Revisa permisos del navegador.');
-  }
-});
+      mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getSupportedAudioMimeType();
+      mediaRecorder = mimeType
+          ? new MediaRecorder(mediaStream, { mimeType })
+          : new MediaRecorder(mediaStream);
+
+      audioChunks = [];
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+      mediaRecorder.onstop = async () => {
+        const blobType = mediaRecorder?.mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunks, { type: blobType });
+        await enviarAudio(audioBlob);
+        mediaStream?.getTracks().forEach((t) => t.stop());
+        mediaStream = null;
+      };
+      mediaRecorder.start();
+      micBtnElement.classList.add('recording');
+      micBtnElement.textContent = '🛑';
+    } catch {
+      mostrarMensaje('bot', 'No se pudo acceder al micrófono. Revisa permisos del navegador.');
+    }
+  });
+}
 
 async function enviarAudio(blob: Blob) {
-  console.log('Se envia audio:', blob.type, blob.size, 'bytes'); // debug
   mostrarMensaje('user', '🎤 Audio enviado');
   toggleLoading(true);
-  micBtn.disabled = true;
+  micBtnElement.disabled = true;
+
   const formData = new FormData();
   const ext = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm';
   const fileName = `recording-${Date.now()}.${ext}`;
@@ -162,7 +284,13 @@ async function enviarAudio(blob: Blob) {
   formData.append('mimetype', blob.type || 'audio/webm');
 
   try {
-    const res = await fetch(`${API_BASE_URL}/chat/audio`, { method: 'POST', body: formData });
+    const res = await fetch(`${API_BASE_URL}/chat/audio`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getToken()}`
+      },
+      body: formData
+    });
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
@@ -177,14 +305,12 @@ async function enviarAudio(blob: Blob) {
     mostrarMensaje('bot', msg);
   } finally {
     toggleLoading(false);
-    micBtn.disabled = false;
+    micBtnElement.disabled = false;
   }
 }
 
-
-
+// --- Manejo de Respuestas de la API ---
 function manejarRespuesta(data: any) {
-
   const res = data.response || data;
 
   if (res.type === 'form') {
@@ -245,7 +371,10 @@ function mostrarFormulario(config: any) {
     try {
       const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getToken()}`
+        },
         body: JSON.stringify(dataObj)
       });
       const resData = await res.json();
@@ -260,28 +389,14 @@ function mostrarFormulario(config: any) {
   card.appendChild(title);
   if (config.description) card.appendChild(description);
   card.appendChild(form);
-  messages.appendChild(card);
-  messages.scrollTop = messages.scrollHeight;
+  messagesElement.appendChild(card);
+  messagesElement.scrollTop = messagesElement.scrollHeight;
 }
 
-
-
-sendBtn.addEventListener('click', () => {
-  void mandarMensaje();
-});
-
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    void mandarMensaje();
-  }
-});
-
-
-const chipBtn = document.querySelector('.chip') as HTMLButtonElement;
-if (chipBtn && input) {
-  chipBtn.addEventListener('click', () => {
-    input.value = 'Navega a la web';
-    input.focus();
-  });
+// --- Flujo Inicial de Arranque ---
+const token = getToken();
+if (token) {
+  mostrarChat();
+} else {
+  mostrarLogin();
 }
